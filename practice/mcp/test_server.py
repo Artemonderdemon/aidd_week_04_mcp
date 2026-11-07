@@ -47,6 +47,32 @@ class ToolTest(unittest.TestCase):
         t = server.add_task("  Купить молоко  ", priority="high", due="2026-10-23")
         self.assertEqual((t["title"], t["priority"], t["due"], t["done"]), ("Купить молоко", "high", "2026-10-23", False))
 
+    def test_weekly_task_digest_fetches_filters_and_sorts_tasks(self):
+        from datetime import date, timedelta
+
+        today = date.today()
+        late = server.add_task("Просроченная", priority="low",
+                               due=(today - timedelta(days=1)).isoformat())
+        soon = server.add_task("Срочная сегодня", priority="high", due=today.isoformat())
+        server.add_task("Далёкая", due=(today + timedelta(days=8)).isoformat())
+        completed = server.add_task("Уже выполнена", due=today.isoformat())
+        server.complete_task(completed["id"])
+        server.add_task("Без срока")
+
+        result = server.weekly_task_digest(7)
+        self.assertIn("включая просроченные", result)
+        self.assertIn(f"id {late['id']}", result)
+        self.assertIn(f"id {soon['id']}", result)
+        self.assertLess(result.index(f"id {late['id']}"), result.index(f"id {soon['id']}"))
+        self.assertNotIn("Далёкая", result)
+        self.assertNotIn("Уже выполнена", result)
+        self.assertNotIn("Без срока", result)
+
+    def test_weekly_task_digest_validates_horizon(self):
+        for days_ahead in ("-1", "366", "tomorrow"):
+            with self.subTest(days_ahead=days_ahead), self.assertRaisesRegex(ValueError, "от 0 до 365"):
+                server.weekly_task_digest(days_ahead)
+
     def test_invalid_input_gives_api_message(self):
         for kw, text in (({"title": "   "}, "пустым"), ({"title": "a", "priority": "urgent"}, "приоритет"),
                          ({"title": "a", "due": "завтра"}, "YYYY-MM-DD"), ({"title": "a" * 201}, "200")):
@@ -76,9 +102,11 @@ class ToolTest(unittest.TestCase):
                     ok = await s.call_tool("add_task", {"title": "Через MCP"})
                     bad = await s.call_tool("add_task", {"title": " "})
                     missing = await s.call_tool("add_task", {})
-                    return tools, ok, bad, missing
+                    prompts = (await s.list_prompts()).prompts
+                    digest = await s.get_prompt("weekly_task_digest", {"days_ahead": "7"})
+                    return tools, ok, bad, missing, prompts, digest
 
-        tools, ok, bad, missing = asyncio.run(asyncio.wait_for(scenario(), 30))
+        tools, ok, bad, missing, prompts, digest = asyncio.run(asyncio.wait_for(scenario(), 30))
         self.assertIn("add_task", [t.name for t in tools])  # остальные tools студенты добавляют сами
         self.assertEqual(g(tools[0], "inputSchema")["required"], ["title"])
         self.assertFalse(g(ok, "isError"))
@@ -86,6 +114,8 @@ class ToolTest(unittest.TestCase):
         self.assertTrue(g(bad, "isError"))
         self.assertIn("пустым", bad.content[0].text)
         self.assertTrue(g(missing, "isError"))
+        self.assertIn("weekly_task_digest", [prompt.name for prompt in prompts])
+        self.assertIn("Подготовь краткий план", digest.messages[0].content.text)
 
     def test_delete_no_answer_times_out_without_deleting(self):
         t = server.add_task("молчание")

@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import urllib.error
 import urllib.request
 
@@ -157,10 +157,50 @@ def task_resource(task_id: str) -> str:
 # --- Prompts: готовые сценарии, которые вызывает пользователь (в клиентах это slash-команда) ---
 
 @mcp.prompt()
-def do_something() -> str:
-    # TODO: придумываем сценарий
-    # например: пометить сделанными все задачи со словом W, срок по которым истёк более N дней назад
-    return "Расскажи анекдот"  
+def weekly_task_digest(days_ahead: str = "7") -> str:
+    """Готовит обзор незавершённых задач с прошедшими или ближайшими сроками.
+
+    days_ahead: горизонт обзора в днях, от 0 до 365.
+    """
+    try:
+        horizon = int(days_ahead)
+    except (TypeError, ValueError):
+        raise ValueError("days_ahead должен быть целым числом от 0 до 365") from None
+    if not 0 <= horizon <= 365:
+        raise ValueError("days_ahead должен быть от 0 до 365")
+
+    today = date.today()
+    cutoff = today + timedelta(days=horizon)
+    tasks = _get("/api/tasks?done=false")
+    due_tasks = []
+    for task in tasks:
+        if not task.get("due"):
+            continue
+        due = date.fromisoformat(task["due"])
+        if due <= cutoff:
+            due_tasks.append((due, task))
+
+    priority_order = {"high": 0, "normal": 1, "low": 2}
+    due_tasks.sort(key=lambda item: (
+        item[0], priority_order.get(item[1].get("priority"), 3), item[1].get("id", 0)))
+
+    if not due_tasks:
+        summary = f"На {today.isoformat()} просроченных и ближайших задач нет."
+    else:
+        lines = [
+            f"- [{task['priority']}] {task['title']} "
+            f"(id {task['id']}, срок {due.isoformat()})"
+            for due, task in due_tasks
+        ]
+        summary = (
+            f"Незавершённые задачи со сроком до {cutoff.isoformat()} "
+            f"(включая просроченные): {len(due_tasks)}.\n" + "\n".join(lines)
+        )
+    return (
+        f"Сегодня {today.isoformat()}. Подготовь краткий план действий по списку: "
+        "сначала просроченные задачи, затем ближайшие; учитывай приоритет. "
+        "Не отмечай задачи выполненными и не удаляй их.\n\n" + summary
+    )
 
 
 if __name__ == "__main__":

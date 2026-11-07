@@ -1,0 +1,159 @@
+{
+  "name": "Support intake - deterministic rules",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "support-intake-rules",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "30f8b457-a84c-4010-b40e-4d60d7e829c1",
+      "name": "Incoming Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "c01e91d4-d64e-42ee-9c98-58a4eccce2cf"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const input = $json.body ?? $json;\nconst message = String(input.message ?? '').trim();\nif (!message) throw new Error('message is required');\nconst text = message.toLowerCase();\nconst rules = [\n  { category: 'access', words: ['login', 'log in', 'sign in', 'войти', 'вход', 'парол'] },\n  { category: 'billing', words: ['bill', 'payment', 'invoice', 'оплат', 'счёт', 'счет', 'списан'] },\n  { category: 'technical', words: ['error', 'broken', 'down', 'ошиб', 'не работает', 'сбой'] },\n];\nconst match = rules.find(rule => rule.words.some(word => text.includes(word)));\nconst urgentWords = ['urgent', 'asap', 'blocked', 'down', 'срочно', 'блокир', 'недоступ'];\nconst urgency = urgentWords.some(word => text.includes(word)) ? 'high' : 'normal';\nconst category = match?.category ?? 'general';\nconst replies = {\n  access: 'Проверим проблему со входом. Не присылайте пароль или коды подтверждения.',\n  billing: 'Передадим обращение специалисту по оплате.',\n  technical: 'Передадим описание технической проблемы специалисту.',\n  general: 'Обращение принято; при необходимости мы уточним детали.',\n};\nreturn { json: { createdAt: new Date().toISOString(), message, category, urgency, summary: message.slice(0, 180), reply: replies[category] } };"
+      },
+      "id": "932e9d00-8d85-48c8-8ba4-9a7cabfcb45d",
+      "name": "Classify by keywords",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Tickets",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "0cb631fa-c02e-4c75-9e90-d5fe4a736526",
+      "name": "Save ticket",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "8c59d4e4-b731-43ef-b128-f95e70505412",
+              "leftValue": "={{ $('Classify by keywords').item.json.urgency }}",
+              "rightValue": "high",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "97160a8d-c4ba-4c2b-9a8d-11233f03b672",
+      "name": "Urgent?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [960, 300]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SPREADSHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Escalations",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "7025113c-e9bd-4c2e-a628-62e4932f87ee",
+      "name": "Save escalation",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Classify by keywords').item.json) }}",
+        "options": {}
+      },
+      "id": "d868e82c-efc1-4ad7-8fa4-b6155a8038d0",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.4,
+      "position": [1440, 300]
+    }
+  ],
+  "connections": {
+    "Incoming Webhook": {
+      "main": [[{"node": "Classify by keywords", "type": "main", "index": 0}]]
+    },
+    "Classify by keywords": {
+      "main": [[{"node": "Save ticket", "type": "main", "index": 0}]]
+    },
+    "Save ticket": {
+      "main": [[{"node": "Urgent?", "type": "main", "index": 0}]]
+    },
+    "Urgent?": {
+      "main": [
+        [{"node": "Save escalation", "type": "main", "index": 0}],
+        [{"node": "Respond", "type": "main", "index": 0}]
+      ]
+    },
+    "Save escalation": {
+      "main": [[{"node": "Respond", "type": "main", "index": 0}]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "39a2ca82-dab5-4db4-b970-6c8f504c8d5e",
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
